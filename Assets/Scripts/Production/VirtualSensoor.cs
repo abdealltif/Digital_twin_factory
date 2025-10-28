@@ -1,6 +1,6 @@
 using UnityEngine;
 
-public class VirtualSensor : MonoBehaviour
+public class VirtualSensoor : MonoBehaviour
 {
     public int pieceCount = 0;
 
@@ -9,7 +9,7 @@ public class VirtualSensor : MonoBehaviour
         // Détecte quand une pièce entre dans la zone
         if (other.CompareTag("Piece"))
         {
-            pieceCount++;
+            pieceCount = Mathf.Max(0, pieceCount - 1); // Évite les valeurs négatives
             Debug.Log($"Pièce détectée ! Total : {pieceCount}");
         }
     }
