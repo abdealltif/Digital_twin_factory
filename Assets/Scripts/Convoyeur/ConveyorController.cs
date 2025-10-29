@@ -4,28 +4,54 @@ using UnityEngine;
 public class ConveyorButtonController : MonoBehaviour
 {
     [Header("Machine Reference")]
-    public MachineController machine;  // ✅ La machine à contrôler
+    public MachineController machine;  // La machine à contrôler
     
     [Header("Conveyor Reference")]
-    public Conveyor_Movement conveyor;
+    public GameObject conveyorObject;  // L'objet du convoyeur (avec Renderer)
     
     [Header("Interaction Settings")]
     public float clickDistance = 10f;
     
     [Header("Animation Settings")]
-    public float rotationAngle = 30f;  // ✅ 30° sur X
+    public float rotationAngle = -30f;
     public float rotationSpeed = 5f;
+    
+    [Header("Conveyor Settings")]
+    public float conveyorSpeed = 0.5f;  // Vitesse de défilement de la texture
     
     private bool isOn = false;
     private Quaternion originalRotation;
     private Quaternion targetRotation;
     private bool isRotating = false;
+    
+    // Pour le convoyeur
+    private Renderer conveyorRenderer;
+    private Vector2 textureOffset;
+    private bool conveyorRunning = false;
 
     void Start()
     {
+        // Rotation du bouton
         originalRotation = transform.rotation;
-        // ✅ Rotation sur l'axe X
         targetRotation = originalRotation * Quaternion.Euler(rotationAngle, 0, 0);
+        
+        // Initialiser le convoyeur
+        if (conveyorObject != null)
+        {
+            conveyorRenderer = conveyorObject.GetComponent<Renderer>();
+            if (conveyorRenderer != null)
+            {
+                textureOffset = conveyorRenderer.material.mainTextureOffset;
+            }
+            else
+            {
+                Debug.LogError("❌ Aucun Renderer trouvé sur le convoyeur !");
+            }
+        }
+        else
+        {
+            Debug.LogWarning("⚠️ Aucun objet convoyeur assigné !");
+        }
     }
 
     void Update()
@@ -45,7 +71,7 @@ public class ConveyorButtonController : MonoBehaviour
             }
         }
 
-        // Animation de rotation
+        // Animation de rotation du bouton
         if (isRotating)
         {
             Quaternion target = isOn ? targetRotation : originalRotation;
@@ -57,6 +83,13 @@ public class ConveyorButtonController : MonoBehaviour
                 isRotating = false;
             }
         }
+        
+        // Animation de la texture du convoyeur (offset Y)
+        if (conveyorRunning && conveyorRenderer != null)
+        {
+            textureOffset.y += Time.deltaTime * conveyorSpeed;
+            conveyorRenderer.material.mainTextureOffset = textureOffset;
+        }
     }
 
     private void ToggleSystem()
@@ -67,44 +100,48 @@ public class ConveyorButtonController : MonoBehaviour
         if (isOn)
         {
             // ✅ Active le convoyeur
-            if (conveyor != null)
-                conveyor.TurnOn();
+            conveyorRunning = true;
             
             // ✅ Démarre la production
             if (machine != null)
+            {
                 machine.StartMachine();
+            }
+            else
+            {
+                Debug.LogWarning("⚠️ Aucune machine assignée !");
+            }
             
             Debug.Log("🟢 Bouton activé - Machine + Convoyeur ON");
         }
         else
         {
             // ❌ Désactive tout
-            if (conveyor != null)
-                conveyor.TurnOff();
+            conveyorRunning = false;
             
             if (machine != null)
+            {
                 machine.StopMachine();
+            }
             
             Debug.Log("🔴 Bouton désactivé - Machine + Convoyeur OFF");
         }
+    }
+    
+    // ✅ Méthodes que MachineController peut appeler
+    public bool IsConveyorRunning()
+    {
+        return conveyorRunning;
+    }
+
+    public float GetConveyorSpeed()
+    {
+        return conveyorRunning ? conveyorSpeed : 0f;
     }
 
     void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.yellow;
         Gizmos.DrawWireSphere(transform.position, 0.5f);
-    }
-}
-
-public class Conveyor_Movement
-{
-    internal void TurnOff()
-    {
-        throw new NotImplementedException();
-    }
-
-    internal void TurnOn()
-    {
-        throw new NotImplementedException();
     }
 }

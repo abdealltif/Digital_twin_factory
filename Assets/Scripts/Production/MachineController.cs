@@ -35,7 +35,7 @@ public class MachineController : MonoBehaviour
     public GameObject piecePrefab;
 
     [Header("Contrôle externe")]
-    public ConveyorController conveyorButton;
+    public ConveyorButtonController conveyorButton;  // ✅ CHANGÉ: ConveyorButtonController au lieu de ConveyorController
 
     [Header("Méthode de déplacement")]
     public MovementMethod movementMethod = MovementMethod.SmoothFollow;
@@ -44,8 +44,8 @@ public class MachineController : MonoBehaviour
     public bool alignToPath = true;
     
     [Header("Physique au stockage")]
-    public bool enableGravityAtStorage = true;  // ✅ Activer la chute au stockage
-    public float dropHeight = 0.5f;  // Hauteur de chute au-dessus du point de stockage
+    [Range(0f, 10f)]
+    public float freezeDuration = 3f;
 
     [Header("Options avancées")]
     public bool autoRestartWhenSpaceAvailable = true;
@@ -70,9 +70,9 @@ public class MachineController : MonoBehaviour
 
     public enum MovementMethod
     {
-        SmoothFollow,      // Rotation fluide qui suit le chemin
-        ParentToWaypoint,  // Parent la pièce au waypoint (meilleur pour inclinaison)
-        RigidbodyPhysics   // Utilise la physique Unity
+        SmoothFollow,
+        ParentToWaypoint,
+        RigidbodyPhysics
     }
 
     #region Initialization
@@ -112,6 +112,10 @@ public class MachineController : MonoBehaviour
 
         if (storagePoint1 == null || storagePoint2 == null || storagePoint3 == null || storagePoint4 == null)
             Debug.LogError("[MachineController] ❌ Points de stockage incomplets ! Assignez les 4 positions.");
+        
+        // ✅ AJOUTÉ: Vérification du bouton de contrôle
+        if (conveyorButton == null)
+            Debug.LogWarning("[MachineController] ⚠️ Aucun bouton de contrôle assigné ! La machine démarrera sans vérification du convoyeur.");
     }
 
     void InitializeRoutes()
@@ -144,6 +148,13 @@ public class MachineController : MonoBehaviour
     #region Public Controls
     public void StartMachine()
     {
+        // ✅ Vérifier si le convoyeur tourne avant de démarrer
+        if (conveyorButton != null && !conveyorButton.IsConveyorRunning())
+        {
+            Debug.LogWarning("⚠️ Impossible de démarrer : convoyeur arrêté !");
+            return;
+        }
+
         if (!isProducing && CanProduce())
         {
             isProducing = true;
@@ -186,6 +197,14 @@ public class MachineController : MonoBehaviour
     {
         while (isProducing)
         {
+            // ✅ AJOUTÉ: Vérifier en continu que le convoyeur tourne
+            if (conveyorButton != null && !conveyorButton.IsConveyorRunning())
+            {
+                Debug.LogWarning("⚠️ Convoyeur arrêté : pause de la production !");
+                StopMachine();
+                yield break;
+            }
+
             if (!CanProduce())
             {
                 Debug.Log("⚠️ Stock plein (4/4) : arrêt automatique");
@@ -217,7 +236,6 @@ public class MachineController : MonoBehaviour
         
         if (piece != null)
         {
-            // ✅ DÉSACTIVER LA PHYSIQUE pendant le déplacement
             Rigidbody rb = piece.GetComponent<Rigidbody>();
             if (rb != null)
             {
@@ -225,7 +243,6 @@ public class MachineController : MonoBehaviour
                 rb.useGravity = false;
             }
 
-            // Désactiver les collisions temporairement
             Collider[] colliders = piece.GetComponentsInChildren<Collider>();
             foreach (Collider col in colliders)
             {
@@ -236,7 +253,6 @@ public class MachineController : MonoBehaviour
             tracker.slotIndex = slotIndex;
             tracker.controller = this;
             
-            // Choisir la méthode de déplacement
             switch (movementMethod)
             {
                 case MovementMethod.SmoothFollow:
@@ -261,7 +277,6 @@ public class MachineController : MonoBehaviour
         }
     }
 
-    // MÉTHODE 1: Rotation fluide améliorée
     IEnumerator AnimatePieceSmoothFollow(GameObject piece, Transform[] waypoints, int targetSlot)
     {
         if (piece == null || waypoints == null)
@@ -281,7 +296,7 @@ public class MachineController : MonoBehaviour
             Vector3 startPos = piece.transform.position;
             Vector3 targetPos = waypoints[i].position;
             Quaternion startRot = piece.transform.rotation;
-            Quaternion targetRot = waypoints[i].rotation; // Utiliser la rotation du waypoint
+            Quaternion targetRot = waypoints[i].rotation;
             
             float distance = Vector3.Distance(startPos, targetPos);
             float duration = distance / moveSpeed;
@@ -291,17 +306,14 @@ public class MachineController : MonoBehaviour
             {
                 progress += Time.deltaTime / duration;
                 
-                // Position
                 piece.transform.position = Vector3.Lerp(startPos, targetPos, progress);
                 
-                // Rotation - s'aligner sur le waypoint
                 if (alignToPath)
                 {
                     piece.transform.rotation = Quaternion.Slerp(startRot, targetRot, progress);
                 }
                 else
                 {
-                    // Rotation basée sur la direction
                     Vector3 direction = (targetPos - startPos).normalized;
                     if (direction != Vector3.zero)
                     {
@@ -313,7 +325,6 @@ public class MachineController : MonoBehaviour
                 yield return null;
             }
 
-            // Assurer la position/rotation finale
             if (piece != null)
             {
                 piece.transform.position = targetPos;
@@ -327,7 +338,6 @@ public class MachineController : MonoBehaviour
         }
     }
 
-    // MÉTHODE 2: Parent au waypoint (RECOMMANDÉ pour inclinaisons)
     IEnumerator AnimatePieceParented(GameObject piece, Transform[] waypoints, int targetSlot)
     {
         if (piece == null || waypoints == null)
@@ -344,7 +354,6 @@ public class MachineController : MonoBehaviour
                 yield break;
             }
 
-            // Parent temporaire au waypoint
             Transform originalParent = piece.transform.parent;
             piece.transform.SetParent(waypoints[i]);
             
@@ -367,7 +376,6 @@ public class MachineController : MonoBehaviour
                 yield return null;
             }
 
-            // Détacher du waypoint
             if (piece != null)
             {
                 piece.transform.SetParent(originalParent);
@@ -380,7 +388,6 @@ public class MachineController : MonoBehaviour
         }
     }
 
-    // MÉTHODE 3: Physique Unity (nécessite Rigidbody)
     IEnumerator AnimatePiecePhysics(GameObject piece, Transform[] waypoints, int targetSlot)
     {
         if (piece == null || waypoints == null)
@@ -389,7 +396,6 @@ public class MachineController : MonoBehaviour
             yield break;
         }
 
-        // Ajouter Rigidbody si nécessaire
         Rigidbody rb = piece.GetComponent<Rigidbody>();
         if (rb == null)
         {
@@ -423,12 +429,11 @@ public class MachineController : MonoBehaviour
 
         if (piece != null)
         {
-            Destroy(rb); // Retirer le Rigidbody
+            Destroy(rb);
             yield return MoveToStorage(piece, targetSlot);
         }
     }
 
-    // Déplacement vers le stockage (commun à toutes les méthodes)
     IEnumerator MoveToStorage(GameObject piece, int targetSlot)
     {
         if (piece == null || targetSlot >= storagePositions.Length || storagePositions[targetSlot] == null)
@@ -438,60 +443,45 @@ public class MachineController : MonoBehaviour
         }
 
         Vector3 startPos = piece.transform.position;
-        Vector3 dropPos = storagePositions[targetSlot].position + Vector3.up * dropHeight; // Position au-dessus
+        Vector3 storagePos = storagePositions[targetSlot].position;
         Quaternion startRot = piece.transform.rotation;
         Quaternion storageRot = storagePositions[targetSlot].rotation;
         
-        float distance = Vector3.Distance(startPos, dropPos);
+        float distance = Vector3.Distance(startPos, storagePos);
         float duration = distance / moveSpeed;
         float progress = 0f;
 
-        // Déplacer jusqu'au point de chute (au-dessus du stockage)
         while (progress < 1f && piece != null)
         {
             progress += Time.deltaTime / duration;
-            piece.transform.position = Vector3.Lerp(startPos, dropPos, progress);
+            piece.transform.position = Vector3.Lerp(startPos, storagePos, progress);
             piece.transform.rotation = Quaternion.Slerp(startRot, storageRot, progress);
             yield return null;
         }
 
         if (piece != null)
         {
-            // ✅ Position finale au-dessus du stockage
-            piece.transform.position = dropPos;
+            piece.transform.position = storagePos;
             piece.transform.rotation = storageRot;
 
-            // ✅ ACTIVER LA PHYSIQUE pour la chute
-            Rigidbody rb = piece.GetComponent<Rigidbody>();
-            if (rb == null)
-            {
-                rb = piece.AddComponent<Rigidbody>();
-            }
-
-            if (enableGravityAtStorage)
-            {
-                rb.isKinematic = false;      // ✅ Activer la physique
-                rb.useGravity = true;        // ✅ Activer la gravité → CHUTE !
-                rb.linearDamping = 0.5f;      // Un peu d'amortissement
-                rb.angularDamping = 0.5f;    // Rotation ralentie
-            }
-            else
-            {
-                rb.isKinematic = true;
-                rb.useGravity = false;
-            }
-
-            // ✅ Réactiver les collisions pour qu'elle tombe et se pose
             Collider[] colliders = piece.GetComponentsInChildren<Collider>();
             foreach (Collider col in colliders)
             {
                 col.enabled = true;
             }
 
-            // Enregistrer dans le stockage
+            Rigidbody rb = piece.GetComponent<Rigidbody>();
+            if (rb != null)
+            {
+                rb.isKinematic = true;
+                rb.useGravity = false;
+            }
+
+            piece.transform.SetParent(storagePositions[targetSlot]);
+
             storedPieces[targetSlot] = piece;
             OnStockChanged?.Invoke(CurrentStock());
-            Debug.Log($"📦 Pièce en chute libre vers Storage{targetSlot + 1} ({CurrentStock()}/4)");
+            Debug.Log($"📦 Pièce stockée dans Storage{targetSlot + 1} ({CurrentStock()}/4)");
 
             if (CurrentStock() >= 4)
             {
@@ -517,7 +507,11 @@ public class MachineController : MonoBehaviour
         {
             yield return new WaitForSeconds(0.5f);
 
-            if (!isProducing && CurrentStock() < minPiecesToRestart && availableSlots.Count > 0)
+            // ✅ MODIFIÉ: Vérifier aussi que le convoyeur tourne
+            if (!isProducing && 
+                CurrentStock() < minPiecesToRestart && 
+                availableSlots.Count > 0 &&
+                (conveyorButton == null || conveyorButton.IsConveyorRunning()))
             {
                 StartMachine();
             }
@@ -634,9 +628,8 @@ public class MachineController : MonoBehaviour
     #endregion
 }
 
-public class ConveyorController
-{
-}
+// ❌ SUPPRIMEZ CETTE CLASSE VIDE
+// La vraie classe ConveyorButtonController est dans ConveyorController.cs
 
 public class PieceTracker : MonoBehaviour
 {
