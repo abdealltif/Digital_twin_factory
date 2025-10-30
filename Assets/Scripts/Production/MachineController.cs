@@ -31,21 +31,20 @@ public class MachineController : MonoBehaviour
     public Transform storagePoint3;
     public Transform storagePoint4;
 
-    [Header("Prefab")]
-    public GameObject piecePrefab;
+    [Header("Prefabs - Types de pièces")]
+    public GameObject pieceTypePrincipal;  // 80%
+    public GameObject pieceTypeSecondaire;  // 20%
+    [Range(0f, 100f)]
+    public float pourcentageTypePrincipal = 80f;
 
     [Header("Contrôle externe")]
-    public ConveyorButtonController conveyorButton;  // ✅ CHANGÉ: ConveyorButtonController au lieu de ConveyorController
+    public ConveyorButtonController conveyorButton;
 
     [Header("Méthode de déplacement")]
     public MovementMethod movementMethod = MovementMethod.SmoothFollow;
     [Range(1f, 20f)]
     public float rotationSpeed = 10f;
     public bool alignToPath = true;
-    
-    [Header("Physique au stockage")]
-    [Range(0f, 10f)]
-    public float freezeDuration = 3f;
 
     [Header("Options avancées")]
     public bool autoRestartWhenSpaceAvailable = true;
@@ -56,17 +55,23 @@ public class MachineController : MonoBehaviour
     public UnityEvent OnMachineStopped;
     public UnityEvent OnStockFull;
     public UnityEvent<int> OnStockChanged;
+    public UnityEvent<PieceType> OnPieceProduced;  // Nouveau événement
 
     private bool isProducing = false;
     private bool leftNext = true;
     private Coroutine productionCoroutine;
     private Coroutine monitorCoroutine;
     
-    private Dictionary<int, GameObject> storedPieces = new Dictionary<int, GameObject>();
+    private Dictionary<int, PieceData> storedPieces = new Dictionary<int, PieceData>();
     private Queue<int> availableSlots = new Queue<int>();
-    private Transform[] storagePositions = new Transform[4];
-    private Transform[] leftRouteWaypoints = new Transform[4];
-    private Transform[] rightRouteWaypoints = new Transform[4];
+    private Transform[] storagePositions;
+    private Transform[] leftRouteWaypoints;
+    private Transform[] rightRouteWaypoints;
+
+    // Statistiques de production
+    private int totalProduced = 0;
+    private int principalProduced = 0;
+    private int secondaireProduced = 0;
 
     public enum MovementMethod
     {
@@ -75,10 +80,29 @@ public class MachineController : MonoBehaviour
         RigidbodyPhysics
     }
 
+    public enum PieceType
+    {
+        Principal,
+        Secondaire
+    }
+
+    private class PieceData
+    {
+        public GameObject piece;
+        public PieceType type;
+
+        public PieceData(GameObject p, PieceType t)
+        {
+            piece = p;
+            type = t;
+        }
+    }
+
     #region Initialization
     void Start()
     {
         ValidateSetup();
+        InitializeArrays();
         InitializeRoutes();
         InitializeStorage();
         
@@ -98,24 +122,30 @@ public class MachineController : MonoBehaviour
 
     void ValidateSetup()
     {
-        if (piecePrefab == null)
-            Debug.LogError("[MachineController] ❌ Aucun prefab de pièce assigné !");
+        if (pieceTypePrincipal == null || pieceTypeSecondaire == null)
+            Debug.LogError("[MachineController] ❌ Prefabs de pièces manquants ! Assignez les deux types.");
         
         if (leftSpawnPoint == null || rightSpawnPoint == null)
             Debug.LogError("[MachineController] ❌ Points de spawn manquants !");
 
         if (leftWaypoint1 == null || leftWaypoint2 == null || leftWaypoint3 == null || leftWaypoint4 == null)
-            Debug.LogError("[MachineController] ❌ Route GAUCHE incomplète ! Assignez les 4 waypoints.");
+            Debug.LogError("[MachineController] ❌ Route GAUCHE incomplète !");
 
         if (rightWaypoint1 == null || rightWaypoint2 == null || rightWaypoint3 == null || rightWaypoint4 == null)
-            Debug.LogError("[MachineController] ❌ Route DROITE incomplète ! Assignez les 4 waypoints.");
+            Debug.LogError("[MachineController] ❌ Route DROITE incomplète !");
 
         if (storagePoint1 == null || storagePoint2 == null || storagePoint3 == null || storagePoint4 == null)
-            Debug.LogError("[MachineController] ❌ Points de stockage incomplets ! Assignez les 4 positions.");
+            Debug.LogError("[MachineController] ❌ Points de stockage incomplets !");
         
-        // ✅ AJOUTÉ: Vérification du bouton de contrôle
         if (conveyorButton == null)
-            Debug.LogWarning("[MachineController] ⚠️ Aucun bouton de contrôle assigné ! La machine démarrera sans vérification du convoyeur.");
+            Debug.LogWarning("[MachineController] ⚠️ Aucun bouton de contrôle assigné !");
+    }
+
+    void InitializeArrays()
+    {
+        storagePositions = new Transform[4];
+        leftRouteWaypoints = new Transform[4];
+        rightRouteWaypoints = new Transform[4];
     }
 
     void InitializeRoutes()
@@ -148,7 +178,6 @@ public class MachineController : MonoBehaviour
     #region Public Controls
     public void StartMachine()
     {
-        // ✅ Vérifier si le convoyeur tourne avant de démarrer
         if (conveyorButton != null && !conveyorButton.IsConveyorRunning())
         {
             Debug.LogWarning("⚠️ Impossible de démarrer : convoyeur arrêté !");
@@ -197,7 +226,6 @@ public class MachineController : MonoBehaviour
     {
         while (isProducing)
         {
-            // ✅ AJOUTÉ: Vérifier en continu que le convoyeur tourne
             if (conveyorButton != null && !conveyorButton.IsConveyorRunning())
             {
                 Debug.LogWarning("⚠️ Convoyeur arrêté : pause de la production !");
@@ -220,56 +248,51 @@ public class MachineController : MonoBehaviour
 
     void SpawnAndAnimatePiece()
     {
-        if (piecePrefab == null || availableSlots.Count == 0) return;
+        if (availableSlots.Count == 0) return;
+
+        // Déterminer le type de pièce (80/20)
+        PieceType type = DetermineProductType();
+        GameObject prefabToUse = (type == PieceType.Principal) ? pieceTypePrincipal : pieceTypeSecondaire;
+
+        if (prefabToUse == null)
+        {
+            Debug.LogError($"[MachineController] ❌ Prefab {type} manquant !");
+            return;
+        }
 
         Transform spawnPoint = leftNext ? leftSpawnPoint : rightSpawnPoint;
         Transform[] routeWaypoints = leftNext ? leftRouteWaypoints : rightRouteWaypoints;
         
-        if (spawnPoint == null)
-        {
-            Debug.LogError("[MachineController] ❌ Point de spawn invalide !");
-            return;
-        }
+        if (spawnPoint == null) return;
 
         int slotIndex = availableSlots.Dequeue();
-        GameObject piece = Instantiate(piecePrefab, spawnPoint.position, spawnPoint.rotation);
+        GameObject piece = Instantiate(prefabToUse, spawnPoint.position, spawnPoint.rotation);
         
         if (piece != null)
         {
-            Rigidbody rb = piece.GetComponent<Rigidbody>();
-            if (rb != null)
-            {
-                rb.isKinematic = true;
-                rb.useGravity = false;
-            }
-
-            Collider[] colliders = piece.GetComponentsInChildren<Collider>();
-            foreach (Collider col in colliders)
-            {
-                col.enabled = false;
-            }
+            ConfigurePiecePhysics(piece, false);
 
             PieceTracker tracker = piece.AddComponent<PieceTracker>();
             tracker.slotIndex = slotIndex;
             tracker.controller = this;
+            tracker.pieceType = type;
             
-            switch (movementMethod)
-            {
-                case MovementMethod.SmoothFollow:
-                    StartCoroutine(AnimatePieceSmoothFollow(piece, routeWaypoints, slotIndex));
-                    break;
-                case MovementMethod.ParentToWaypoint:
-                    StartCoroutine(AnimatePieceParented(piece, routeWaypoints, slotIndex));
-                    break;
-                case MovementMethod.RigidbodyPhysics:
-                    StartCoroutine(AnimatePiecePhysics(piece, routeWaypoints, slotIndex));
-                    break;
-            }
+            // Mise à jour des statistiques
+            totalProduced++;
+            if (type == PieceType.Principal)
+                principalProduced++;
+            else
+                secondaireProduced++;
+
+            OnPieceProduced?.Invoke(type);
+
+            StartCoroutine(AnimatePiece(piece, routeWaypoints, slotIndex, type));
             
             leftNext = !leftNext;
             
             string side = leftNext ? "DROITE" : "GAUCHE";
-            Debug.Log($"✨ Pièce créée côté {side} → Slot {slotIndex + 1}/4");
+            string typeName = (type == PieceType.Principal) ? "Principal" : "Secondaire";
+            Debug.Log($"✨ Pièce {typeName} créée côté {side} → Slot {slotIndex + 1}/4 (Stats: {principalProduced}/{secondaireProduced})");
         }
         else
         {
@@ -277,48 +300,84 @@ public class MachineController : MonoBehaviour
         }
     }
 
-    IEnumerator AnimatePieceSmoothFollow(GameObject piece, Transform[] waypoints, int targetSlot)
+    PieceType DetermineProductType()
     {
-        if (piece == null || waypoints == null)
+        float random = Random.Range(0f, 100f);
+        return (random < pourcentageTypePrincipal) ? PieceType.Principal : PieceType.Secondaire;
+    }
+
+    void ConfigurePiecePhysics(GameObject piece, bool enablePhysics)
+    {
+        Rigidbody rb = piece.GetComponent<Rigidbody>();
+        if (rb != null)
         {
-            ReleaseSlot(targetSlot);
-            yield break;
+            rb.isKinematic = !enablePhysics;
+            rb.useGravity = enablePhysics;
         }
 
-        for (int i = 0; i < waypoints.Length; i++)
+        Collider[] colliders = piece.GetComponentsInChildren<Collider>();
+        foreach (Collider col in colliders)
         {
-            if (waypoints[i] == null || piece == null)
-            {
-                ReleaseSlot(targetSlot);
-                yield break;
-            }
+            col.enabled = enablePhysics;
+        }
+    }
+
+    IEnumerator AnimatePiece(GameObject piece, Transform[] waypoints, int targetSlot, PieceType type)
+    {
+        switch (movementMethod)
+        {
+            case MovementMethod.SmoothFollow:
+                yield return AnimatePieceSmoothFollow(piece, waypoints);
+                break;
+            case MovementMethod.ParentToWaypoint:
+                yield return AnimatePieceParented(piece, waypoints);
+                break;
+            case MovementMethod.RigidbodyPhysics:
+                yield return AnimatePiecePhysics(piece, waypoints);
+                break;
+        }
+
+        if (piece != null)
+        {
+            yield return MoveToStorage(piece, targetSlot, type);
+        }
+        else
+        {
+            ReleaseSlot(targetSlot);
+        }
+    }
+
+    IEnumerator AnimatePieceSmoothFollow(GameObject piece, Transform[] waypoints)
+    {
+        foreach (Transform waypoint in waypoints)
+        {
+            if (waypoint == null || piece == null) yield break;
 
             Vector3 startPos = piece.transform.position;
-            Vector3 targetPos = waypoints[i].position;
             Quaternion startRot = piece.transform.rotation;
-            Quaternion targetRot = waypoints[i].rotation;
             
-            float distance = Vector3.Distance(startPos, targetPos);
+            float distance = Vector3.Distance(startPos, waypoint.position);
             float duration = distance / moveSpeed;
-            float progress = 0f;
+            float elapsed = 0f;
 
-            while (progress < 1f && piece != null)
+            while (elapsed < duration && piece != null)
             {
-                progress += Time.deltaTime / duration;
+                elapsed += Time.deltaTime;
+                float t = elapsed / duration;
                 
-                piece.transform.position = Vector3.Lerp(startPos, targetPos, progress);
+                piece.transform.position = Vector3.Lerp(startPos, waypoint.position, t);
                 
                 if (alignToPath)
                 {
-                    piece.transform.rotation = Quaternion.Slerp(startRot, targetRot, progress);
+                    piece.transform.rotation = Quaternion.Slerp(startRot, waypoint.rotation, t);
                 }
                 else
                 {
-                    Vector3 direction = (targetPos - startPos).normalized;
-                    if (direction != Vector3.zero)
+                    Vector3 direction = (waypoint.position - startPos).normalized;
+                    if (direction.sqrMagnitude > 0.001f)
                     {
                         Quaternion lookRot = Quaternion.LookRotation(direction);
-                        piece.transform.rotation = Quaternion.Slerp(piece.transform.rotation, lookRot, Time.deltaTime * rotationSpeed);
+                        piece.transform.rotation = Quaternion.RotateTowards(piece.transform.rotation, lookRot, rotationSpeed * Time.deltaTime);
                     }
                 }
                 
@@ -327,75 +386,49 @@ public class MachineController : MonoBehaviour
 
             if (piece != null)
             {
-                piece.transform.position = targetPos;
-                if (alignToPath) piece.transform.rotation = targetRot;
+                piece.transform.position = waypoint.position;
+                if (alignToPath) piece.transform.rotation = waypoint.rotation;
             }
-        }
-
-        if (piece != null)
-        {
-            yield return MoveToStorage(piece, targetSlot);
         }
     }
 
-    IEnumerator AnimatePieceParented(GameObject piece, Transform[] waypoints, int targetSlot)
+    IEnumerator AnimatePieceParented(GameObject piece, Transform[] waypoints)
     {
-        if (piece == null || waypoints == null)
-        {
-            ReleaseSlot(targetSlot);
-            yield break;
-        }
+        Transform originalParent = piece.transform.parent;
 
-        for (int i = 0; i < waypoints.Length; i++)
+        foreach (Transform waypoint in waypoints)
         {
-            if (waypoints[i] == null || piece == null)
-            {
-                ReleaseSlot(targetSlot);
-                yield break;
-            }
+            if (waypoint == null || piece == null) yield break;
 
-            Transform originalParent = piece.transform.parent;
-            piece.transform.SetParent(waypoints[i]);
+            piece.transform.SetParent(waypoint);
             
-            Vector3 localStartPos = piece.transform.localPosition;
-            Quaternion localStartRot = piece.transform.localRotation;
-            Vector3 localTargetPos = Vector3.zero;
-            Quaternion localTargetRot = Quaternion.identity;
+            Vector3 startPos = piece.transform.localPosition;
+            Quaternion startRot = piece.transform.localRotation;
             
-            float distance = Vector3.Distance(piece.transform.position, waypoints[i].position);
+            float distance = startPos.magnitude;
             float duration = distance / moveSpeed;
-            float progress = 0f;
+            float elapsed = 0f;
 
-            while (progress < 1f && piece != null)
+            while (elapsed < duration && piece != null)
             {
-                progress += Time.deltaTime / duration;
+                elapsed += Time.deltaTime;
+                float t = elapsed / duration;
                 
-                piece.transform.localPosition = Vector3.Lerp(localStartPos, localTargetPos, progress);
-                piece.transform.localRotation = Quaternion.Slerp(localStartRot, localTargetRot, progress);
+                piece.transform.localPosition = Vector3.Lerp(startPos, Vector3.zero, t);
+                piece.transform.localRotation = Quaternion.Slerp(startRot, Quaternion.identity, t);
                 
                 yield return null;
             }
-
-            if (piece != null)
-            {
-                piece.transform.SetParent(originalParent);
-            }
         }
 
         if (piece != null)
         {
-            yield return MoveToStorage(piece, targetSlot);
+            piece.transform.SetParent(originalParent);
         }
     }
 
-    IEnumerator AnimatePiecePhysics(GameObject piece, Transform[] waypoints, int targetSlot)
+    IEnumerator AnimatePiecePhysics(GameObject piece, Transform[] waypoints)
     {
-        if (piece == null || waypoints == null)
-        {
-            ReleaseSlot(targetSlot);
-            yield break;
-        }
-
         Rigidbody rb = piece.GetComponent<Rigidbody>();
         if (rb == null)
         {
@@ -404,37 +437,31 @@ public class MachineController : MonoBehaviour
             rb.constraints = RigidbodyConstraints.FreezeRotation;
         }
 
-        for (int i = 0; i < waypoints.Length; i++)
+        foreach (Transform waypoint in waypoints)
         {
-            if (waypoints[i] == null || piece == null)
-            {
-                ReleaseSlot(targetSlot);
-                yield break;
-            }
+            if (waypoint == null || piece == null) yield break;
 
-            while (piece != null && Vector3.Distance(piece.transform.position, waypoints[i].position) > 0.1f)
+            while (piece != null && Vector3.SqrMagnitude(piece.transform.position - waypoint.position) > 0.01f)
             {
-                Vector3 direction = (waypoints[i].position - piece.transform.position).normalized;
-                rb.MovePosition(piece.transform.position + direction * moveSpeed * Time.deltaTime);
+                Vector3 direction = (waypoint.position - piece.transform.position).normalized;
+                rb.MovePosition(piece.transform.position + direction * moveSpeed * Time.fixedDeltaTime);
                 
                 if (alignToPath)
                 {
-                    Quaternion targetRot = waypoints[i].rotation;
-                    rb.MoveRotation(Quaternion.Slerp(piece.transform.rotation, targetRot, Time.deltaTime * rotationSpeed));
+                    rb.MoveRotation(Quaternion.RotateTowards(piece.transform.rotation, waypoint.rotation, rotationSpeed * Time.fixedDeltaTime));
                 }
                 
                 yield return new WaitForFixedUpdate();
             }
         }
 
-        if (piece != null)
+        if (piece != null && rb != null)
         {
             Destroy(rb);
-            yield return MoveToStorage(piece, targetSlot);
         }
     }
 
-    IEnumerator MoveToStorage(GameObject piece, int targetSlot)
+    IEnumerator MoveToStorage(GameObject piece, int targetSlot, PieceType type)
     {
         if (piece == null || targetSlot >= storagePositions.Length || storagePositions[targetSlot] == null)
         {
@@ -442,46 +469,35 @@ public class MachineController : MonoBehaviour
             yield break;
         }
 
+        Transform storageTransform = storagePositions[targetSlot];
         Vector3 startPos = piece.transform.position;
-        Vector3 storagePos = storagePositions[targetSlot].position;
         Quaternion startRot = piece.transform.rotation;
-        Quaternion storageRot = storagePositions[targetSlot].rotation;
         
-        float distance = Vector3.Distance(startPos, storagePos);
+        float distance = Vector3.Distance(startPos, storageTransform.position);
         float duration = distance / moveSpeed;
-        float progress = 0f;
+        float elapsed = 0f;
 
-        while (progress < 1f && piece != null)
+        while (elapsed < duration && piece != null)
         {
-            progress += Time.deltaTime / duration;
-            piece.transform.position = Vector3.Lerp(startPos, storagePos, progress);
-            piece.transform.rotation = Quaternion.Slerp(startRot, storageRot, progress);
+            elapsed += Time.deltaTime;
+            float t = elapsed / duration;
+            
+            piece.transform.position = Vector3.Lerp(startPos, storageTransform.position, t);
+            piece.transform.rotation = Quaternion.Slerp(startRot, storageTransform.rotation, t);
             yield return null;
         }
 
         if (piece != null)
         {
-            piece.transform.position = storagePos;
-            piece.transform.rotation = storageRot;
+            piece.transform.SetPositionAndRotation(storageTransform.position, storageTransform.rotation);
+            ConfigurePiecePhysics(piece, true);  // ✅ Physique activée pour le picking
+            piece.transform.SetParent(storageTransform);
 
-            Collider[] colliders = piece.GetComponentsInChildren<Collider>();
-            foreach (Collider col in colliders)
-            {
-                col.enabled = true;
-            }
-
-            Rigidbody rb = piece.GetComponent<Rigidbody>();
-            if (rb != null)
-            {
-                rb.isKinematic = true;
-                rb.useGravity = false;
-            }
-
-            piece.transform.SetParent(storagePositions[targetSlot]);
-
-            storedPieces[targetSlot] = piece;
+            storedPieces[targetSlot] = new PieceData(piece, type);
             OnStockChanged?.Invoke(CurrentStock());
-            Debug.Log($"📦 Pièce stockée dans Storage{targetSlot + 1} ({CurrentStock()}/4)");
+            
+            string typeName = (type == PieceType.Principal) ? "Principal" : "Secondaire";
+            Debug.Log($"📦 Pièce {typeName} stockée → Storage{targetSlot + 1} ({CurrentStock()}/4)");
 
             if (CurrentStock() >= 4)
             {
@@ -496,18 +512,16 @@ public class MachineController : MonoBehaviour
     #endregion
 
     #region Stock Management
-    bool CanProduce()
-    {
-        return availableSlots.Count > 0;
-    }
+    bool CanProduce() => availableSlots.Count > 0;
 
     IEnumerator MonitorStock()
     {
+        WaitForSeconds delay = new WaitForSeconds(0.5f);
+        
         while (true)
         {
-            yield return new WaitForSeconds(0.5f);
+            yield return delay;
 
-            // ✅ MODIFIÉ: Vérifier aussi que le convoyeur tourne
             if (!isProducing && 
                 CurrentStock() < minPiecesToRestart && 
                 availableSlots.Count > 0 &&
@@ -520,12 +534,11 @@ public class MachineController : MonoBehaviour
 
     public void RemovePiece(int slotIndex)
     {
-        if (storedPieces.ContainsKey(slotIndex))
+        if (storedPieces.TryGetValue(slotIndex, out PieceData data))
         {
-            GameObject piece = storedPieces[slotIndex];
-            if (piece != null)
+            if (data.piece != null)
             {
-                Destroy(piece);
+                Destroy(data.piece);
             }
             storedPieces.Remove(slotIndex);
             ReleaseSlot(slotIndex);
@@ -546,8 +559,8 @@ public class MachineController : MonoBehaviour
     {
         foreach (var kvp in storedPieces)
         {
-            if (kvp.Value != null)
-                Destroy(kvp.Value);
+            if (kvp.Value?.piece != null)
+                Destroy(kvp.Value.piece);
         }
         
         storedPieces.Clear();
@@ -559,6 +572,14 @@ public class MachineController : MonoBehaviour
         }
         
         OnStockChanged?.Invoke(0);
+        ResetStatistics();
+    }
+
+    void ResetStatistics()
+    {
+        totalProduced = 0;
+        principalProduced = 0;
+        secondaireProduced = 0;
     }
     #endregion
 
@@ -566,8 +587,19 @@ public class MachineController : MonoBehaviour
     public bool IsProducing() => isProducing;
     public int CurrentStock() => storedPieces.Count;
     public int MaxCapacity() => 4;
-    public float StockPercentage() => (float)CurrentStock() / 4f;
+    public float StockPercentage() => storedPieces.Count / 4f;
     public int AvailableSlots() => availableSlots.Count;
+    
+    // Nouvelles statistiques
+    public int GetTotalProduced() => totalProduced;
+    public int GetPrincipalProduced() => principalProduced;
+    public int GetSecondaireProduced() => secondaireProduced;
+    public float GetActualPrincipalPercentage() => totalProduced > 0 ? (principalProduced * 100f / totalProduced) : 0f;
+    
+    public PieceType GetStoredPieceType(int slotIndex)
+    {
+        return storedPieces.TryGetValue(slotIndex, out PieceData data) ? data.type : PieceType.Principal;
+    }
     #endregion
 
     #region Debug Gizmos
@@ -588,11 +620,7 @@ public class MachineController : MonoBehaviour
         DrawRoute(leftSpawnPoint, new Transform[] { leftWaypoint1, leftWaypoint2, leftWaypoint3, leftWaypoint4 }, Color.green);
         DrawRoute(rightSpawnPoint, new Transform[] { rightWaypoint1, rightWaypoint2, rightWaypoint3, rightWaypoint4 }, Color.blue);
 
-        Gizmos.color = Color.yellow;
-        if (storagePoint1 != null) DrawStoragePoint(storagePoint1, 0);
-        if (storagePoint2 != null) DrawStoragePoint(storagePoint2, 1);
-        if (storagePoint3 != null) DrawStoragePoint(storagePoint3, 2);
-        if (storagePoint4 != null) DrawStoragePoint(storagePoint4, 3);
+        DrawStoragePoints();
     }
 
     void DrawRoute(Transform spawn, Transform[] waypoints, Color color)
@@ -602,39 +630,48 @@ public class MachineController : MonoBehaviour
         Gizmos.color = color;
         Vector3 lastPos = spawn.position;
 
-        for (int i = 0; i < waypoints.Length; i++)
+        foreach (Transform waypoint in waypoints)
         {
-            if (waypoints[i] != null)
+            if (waypoint != null)
             {
-                Gizmos.DrawWireSphere(waypoints[i].position, 0.1f);
-                Gizmos.DrawLine(lastPos, waypoints[i].position);
-                lastPos = waypoints[i].position;
+                Gizmos.DrawWireSphere(waypoint.position, 0.1f);
+                Gizmos.DrawLine(lastPos, waypoint.position);
+                lastPos = waypoint.position;
             }
         }
     }
 
-    void DrawStoragePoint(Transform storage, int index)
+    void DrawStoragePoints()
     {
-        if (storage == null) return;
+        Transform[] points = { storagePoint1, storagePoint2, storagePoint3, storagePoint4 };
+        
+        for (int i = 0; i < points.Length; i++)
+        {
+            if (points[i] != null)
+            {
+                if (Application.isPlaying && storedPieces.ContainsKey(i))
+                {
+                    PieceType type = storedPieces[i].type;
+                    Gizmos.color = (type == PieceType.Principal) ? Color.cyan : Color.magenta;
+                }
+                else
+                {
+                    Gizmos.color = Color.yellow;
+                }
 
-        if (Application.isPlaying && storedPieces.ContainsKey(index))
-            Gizmos.color = Color.red;
-        else
-            Gizmos.color = Color.green;
-
-        Gizmos.DrawWireSphere(storage.position, 0.12f);
-        Gizmos.DrawWireCube(storage.position, Vector3.one * 0.2f);
+                Gizmos.DrawWireSphere(points[i].position, 0.12f);
+                Gizmos.DrawWireCube(points[i].position, Vector3.one * 0.2f);
+            }
+        }
     }
     #endregion
 }
-
-// ❌ SUPPRIMEZ CETTE CLASSE VIDE
-// La vraie classe ConveyorButtonController est dans ConveyorController.cs
 
 public class PieceTracker : MonoBehaviour
 {
     public int slotIndex;
     public MachineController controller;
+    public MachineController.PieceType pieceType;
 
     void OnDestroy()
     {
