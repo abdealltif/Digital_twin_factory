@@ -5205,7 +5205,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ChariotController
   moveSpeed: 5
   rotationSpeed: 50
-  interactionDistance: 3
+  interactionDistance: 10
   player: {fileID: 2110879973}
   frontWheels:
   - {fileID: 0}
