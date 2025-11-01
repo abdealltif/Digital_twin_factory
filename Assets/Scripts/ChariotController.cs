@@ -2,8 +2,7 @@ using UnityEngine;
 using System.Collections.Generic;
 
 /// <summary>
-/// Contrôleur de chariot avec système de chargement de pièces
-/// Trolley controller with piece loading system
+/// Contrôleur de chariot avec système bidirectionnel (charger/décharger)
 /// </summary>
 [RequireComponent(typeof(Rigidbody))]
 public class ChariotController : MonoBehaviour
@@ -24,17 +23,11 @@ public class ChariotController : MonoBehaviour
     [Tooltip("Deuxième type de pièce accepté")]
     [SerializeField] private GameObject pieceType2Prefab;
 
-    [Header("📍 Loading Slots (Empty GameObjects)")]
-    [Tooltip("Glissez ici les 4 Empty GameObjects qui définissent les emplacements")]
+    [Header("📍 Loading Slots (4 Empty GameObjects)")]
+    [Tooltip("Glissez ici les 4 Empty GameObjects: Slot1, Slot2, Slot3, Slot4")]
     [SerializeField] private Transform[] loadingSlots = new Transform[4];
 
     [Header("🔧 Advanced Settings")]
-    [Tooltip("Taille de la zone de détection de chargement")]
-    [SerializeField] private Vector3 loadingZoneSize = new Vector3(2.5f, 2f, 2.5f);
-    
-    [Tooltip("Hauteur de la zone de chargement")]
-    [SerializeField] private float loadingZoneHeight = 1f;
-    
     [Tooltip("Activer les logs de debug")]
     [SerializeField] private bool debugMode = true;
 
@@ -42,11 +35,9 @@ public class ChariotController : MonoBehaviour
 
     #region Constants
 
-    // Position et rotation du chariot par rapport au joueur
     private const float PUSH_DISTANCE = 0.92f;
     private const float HEIGHT_OFFSET = 0.68f;
     private const float ROTATION_Y = 180f;
-    
     private const int MAX_CAPACITY = 4;
 
     #endregion
@@ -54,17 +45,11 @@ public class ChariotController : MonoBehaviour
     #region Private Variables
 
     private Rigidbody rb;
-    private BoxCollider loadingZoneTrigger;
     private PickUpSimple playerPickupScript;
     
     private bool isPlayerControlling;
-    private GameObject[] loadedPieces = new GameObject[MAX_CAPACITY]; // ✅ Array au lieu de List
+    private GameObject[] loadedPieces = new GameObject[MAX_CAPACITY];
     private HashSet<string> acceptedTags = new HashSet<string>();
-    
-    // ✅ NOUVEAU : Suivi du dernier objet détecté pour éviter les doubles chargements
-    private GameObject lastDetectedPiece;
-    private float lastLoadTime;
-    private const float LOAD_COOLDOWN = 0.5f; // Temps entre deux chargements
 
     #endregion
 
@@ -86,13 +71,6 @@ public class ChariotController : MonoBehaviour
     {
         rb = GetComponent<Rigidbody>();
         rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
-
-        // Zone de chargement (Trigger)
-        loadingZoneTrigger = gameObject.AddComponent<BoxCollider>();
-        loadingZoneTrigger.isTrigger = true;
-        loadingZoneTrigger.center = new Vector3(0f, loadingZoneHeight, 0f);
-        loadingZoneTrigger.size = loadingZoneSize;
-
         LogDebug("✅ Composants initialisés");
     }
 
@@ -144,7 +122,6 @@ public class ChariotController : MonoBehaviour
             Debug.LogWarning("⚠️ Aucun type de pièce configuré !");
         }
 
-        // ✅ NOUVEAU : Vérifier les slots
         bool allSlotsAssigned = true;
         for (int i = 0; i < loadingSlots.Length; i++)
         {
@@ -177,13 +154,13 @@ public class ChariotController : MonoBehaviour
         bool isInRange = distance <= interactionDistance;
 
         // Touche E : Pousser/Relâcher le chariot
-        if (Input.GetKeyDown(KeyCode.E))
+        if (Input.GetKeyDown(KeyCode.E) && isInRange)
         {
             if (isPlayerControlling)
             {
                 ReleaseTrolley();
             }
-            else if (isInRange)
+            else
             {
                 StartPushing();
             }
@@ -200,12 +177,6 @@ public class ChariotController : MonoBehaviour
         {
             PrintStatistics();
         }
-
-        // ✅ NOUVEAU : Touche Q pour charger manuellement la pièce tenue
-        if (Input.GetKeyDown(KeyCode.Q) && isInRange)
-        {
-            TryLoadHeldPiece();
-        }
     }
 
     #endregion
@@ -213,53 +184,16 @@ public class ChariotController : MonoBehaviour
     #region Piece Loading System
 
     /// <summary>
-    /// ✅ NOUVEAU : Tente de charger la pièce tenue manuellement (touche Q)
+    /// Appelée par PickUpSimple pour charger une pièce
     /// </summary>
-    void TryLoadHeldPiece()
+    public bool TryLoadPieceFromPlayer(GameObject piece)
     {
-        if (playerPickupScript == null || playerPickupScript.hand == null)
+        if (piece == null)
         {
-            LogDebug("❌ Pas de système de ramassage disponible");
-            return;
+            LogDebug("❌ Aucune pièce fournie");
+            return false;
         }
 
-        // Vérifier si le joueur tient une pièce
-        if (playerPickupScript.hand.childCount == 0)
-        {
-            LogDebug("❌ Vous ne tenez aucune pièce");
-            return;
-        }
-
-        GameObject heldPiece = playerPickupScript.hand.GetChild(0).gameObject;
-        
-        if (CanLoadPiece(heldPiece))
-        {
-            LoadPiece(heldPiece);
-        }
-    }
-
-    void OnTriggerEnter(Collider other)
-    {
-        // ✅ MODIFIÉ : Vérification du cooldown pour éviter les doubles chargements
-        if (Time.time - lastLoadTime < LOAD_COOLDOWN)
-        {
-            return;
-        }
-
-        if (other.gameObject == lastDetectedPiece)
-        {
-            return;
-        }
-
-        if (!CanLoadPiece(other.gameObject)) return;
-
-        LoadPiece(other.gameObject);
-        lastDetectedPiece = other.gameObject;
-        lastLoadTime = Time.time;
-    }
-
-    bool CanLoadPiece(GameObject piece)
-    {
         if (IsFull())
         {
             LogDebug("⚠️ Chariot plein !");
@@ -272,44 +206,15 @@ public class ChariotController : MonoBehaviour
             return false;
         }
 
-        if (!IsHeldByPlayer(piece))
-        {
-            LogDebug("❌ La pièce doit être tenue par le joueur");
-            return false;
-        }
-
-        // ✅ NOUVEAU : Vérifier que la pièce n'est pas déjà chargée
-        for (int i = 0; i < loadedPieces.Length; i++)
-        {
-            if (loadedPieces[i] == piece)
-            {
-                LogDebug("❌ Cette pièce est déjà chargée");
-                return false;
-            }
-        }
-
+        LoadPieceIntoSlot(piece);
         return true;
     }
 
-    bool IsAcceptedPieceType(GameObject piece)
-    {
-        return acceptedTags.Contains(piece.tag);
-    }
-
-    bool IsHeldByPlayer(GameObject piece)
-    {
-        if (playerPickupScript == null || playerPickupScript.hand == null)
-            return false;
-
-        return piece.transform.parent == playerPickupScript.hand;
-    }
-
     /// <summary>
-    /// ✅ MODIFIÉ : Utilise les Empty GameObjects comme emplacements
+    /// Charge une pièce dans le prochain slot disponible
     /// </summary>
-    void LoadPiece(GameObject piece)
+    void LoadPieceIntoSlot(GameObject piece)
     {
-        // Trouver le premier emplacement libre
         int freeSlotIndex = GetFirstFreeSlot();
         
         if (freeSlotIndex == -1)
@@ -320,25 +225,57 @@ public class ChariotController : MonoBehaviour
 
         Transform targetSlot = loadingSlots[freeSlotIndex];
 
-        // Détacher de la main du joueur
+        // Attacher au slot
         piece.transform.SetParent(targetSlot);
-
-        // ✅ Positionner EXACTEMENT à l'emplacement du slot
         piece.transform.localPosition = Vector3.zero;
         piece.transform.localRotation = Quaternion.identity;
 
         // Désactiver la physique
         DisablePiecePhysics(piece);
 
-        // Ajouter à l'array
+        // Enregistrer dans l'array
         loadedPieces[freeSlotIndex] = piece;
 
-        LogDebug($"📦 {piece.name} chargé dans Slot {freeSlotIndex + 1} [{GetLoadedCount()}/{MAX_CAPACITY}]");
+        LogDebug($"📦 {piece.name} chargé dans Slot{freeSlotIndex + 1} [{GetLoadedCount()}/{MAX_CAPACITY}]");
     }
 
     /// <summary>
-    /// ✅ NOUVEAU : Trouve le premier emplacement libre
+    /// 🆕 Retourne la dernière pièce chargée (pour le ramassage depuis le trolley)
     /// </summary>
+    public GameObject GetLastLoadedPiece()
+    {
+        // Chercher de la fin vers le début
+        for (int i = loadedPieces.Length - 1; i >= 0; i--)
+        {
+            if (loadedPieces[i] != null)
+            {
+                return loadedPieces[i];
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 🆕 Retire une pièce spécifique du trolley (appelée par PickUpSimple)
+    /// </summary>
+    public void RemovePiece(GameObject piece)
+    {
+        for (int i = 0; i < loadedPieces.Length; i++)
+        {
+            if (loadedPieces[i] == piece)
+            {
+                loadedPieces[i] = null;
+                LogDebug($"🔓 {piece.name} retiré du Slot{i + 1} [{GetLoadedCount()}/{MAX_CAPACITY}]");
+                return;
+            }
+        }
+    }
+
+    bool IsAcceptedPieceType(GameObject piece)
+    {
+        return acceptedTags.Contains(piece.tag);
+    }
+
     int GetFirstFreeSlot()
     {
         for (int i = 0; i < loadedPieces.Length; i++)
@@ -348,7 +285,7 @@ public class ChariotController : MonoBehaviour
                 return i;
             }
         }
-        return -1; // Aucun emplacement libre
+        return -1;
     }
 
     void DisablePiecePhysics(GameObject piece)
@@ -360,11 +297,6 @@ public class ChariotController : MonoBehaviour
             pieceRb.useGravity = false;
             pieceRb.linearVelocity = Vector3.zero;
             pieceRb.angularVelocity = Vector3.zero;
-        }
-
-        foreach (Collider col in piece.GetComponentsInChildren<Collider>())
-        {
-            col.enabled = false;
         }
     }
 
@@ -383,6 +315,9 @@ public class ChariotController : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Décharge toutes les pièces au sol
+    /// </summary>
     public void UnloadAllPieces()
     {
         int count = 0;
@@ -406,9 +341,6 @@ public class ChariotController : MonoBehaviour
                 count++;
             }
         }
-
-        // Réinitialiser le cooldown
-        lastDetectedPiece = null;
         
         LogDebug($"📤 {count} pièce(s) déchargée(s)");
     }
@@ -450,9 +382,6 @@ public class ChariotController : MonoBehaviour
 
     #region Public API
 
-    /// <summary>
-    /// ✅ MODIFIÉ : Compte les pièces non-null
-    /// </summary>
     public int GetLoadedCount()
     {
         int count = 0;
@@ -521,29 +450,22 @@ public class ChariotController : MonoBehaviour
         {
             Vector3 pushPos = player.position + player.forward * PUSH_DISTANCE + Vector3.up * HEIGHT_OFFSET;
             Gizmos.color = Color.cyan;
-            Gizmos.DrawWireCube(pushPos, Vector3.one);
+            Gizmos.DrawWireCube(pushPos, Vector3.one * 0.5f);
             Gizmos.DrawLine(player.position, pushPos);
         }
 
-        // Zone de chargement
-        Gizmos.color = new Color(0f, 1f, 1f, 0.3f);
-        Gizmos.matrix = transform.localToWorldMatrix;
-        Gizmos.DrawWireCube(new Vector3(0f, loadingZoneHeight, 0f), loadingZoneSize);
-
-        // ✅ MODIFIÉ : Afficher les emplacements depuis les Empty GameObjects
+        // Afficher les slots
         for (int i = 0; i < loadingSlots.Length; i++)
         {
             if (loadingSlots[i] != null)
             {
                 Vector3 worldPos = loadingSlots[i].position;
                 
-                // Couleur selon l'état
                 bool isOccupied = Application.isPlaying && i < loadedPieces.Length && loadedPieces[i] != null;
-                Gizmos.color = isOccupied ? Color.green : new Color(1f, 0f, 0f, 0.5f);
+                Gizmos.color = isOccupied ? Color.green : new Color(1f, 0.5f, 0f, 0.7f);
                 
                 Gizmos.DrawWireCube(worldPos, Vector3.one * 0.5f);
                 
-                // Afficher le numéro du slot
                 #if UNITY_EDITOR
                 UnityEditor.Handles.Label(worldPos + Vector3.up * 0.5f, $"Slot {i + 1}");
                 #endif
