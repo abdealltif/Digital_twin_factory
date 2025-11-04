@@ -12,87 +12,101 @@ public class ScriptSwetcher : MonoBehaviour
     // Bouton Start
     public Button startButton;
 
-    // Texte pour afficher les messages d'erreur
-    public Text errorText_UI;                 // UI Text classique
-    public TextMeshProUGUI errorText_TMP;    // TMP Text
+    // ✅ MODIFIÉ : Seulement TMP pour l'erreur
+    public TextMeshProUGUI errorText_TMP;     // TMP Text pour erreur
 
     // Nom de l'utilisateur à partager entre les scènes
     public static string PlayerName = "";
 
+    // Cache pour éviter les répétitions
+    private TMP_InputField activeInput;
+
     private void Start()
     {
-        // Vérifie si le Start button doit être actif au départ
-        UpdateStartButtonState();
+        // Déterminer quel InputField est utilisé
+        activeInput = nameInput_TMP != null ? nameInput_TMP : null;
 
-        // Ajouter un listener pour détecter les changements dans l'InputField
+        // Bouton toujours actif
+        if (startButton != null)
+            startButton.interactable = true;
+
+        // Ajouter un listener pour cacher l'erreur quand l'utilisateur tape
         if (nameInput_UI != null)
-            nameInput_UI.onValueChanged.AddListener(delegate { UpdateStartButtonState(); });
+            nameInput_UI.onValueChanged.AddListener(OnNameChanged);
         if (nameInput_TMP != null)
-            nameInput_TMP.onValueChanged.AddListener(delegate { UpdateStartButtonState(); });
+            nameInput_TMP.onValueChanged.AddListener(OnNameChanged);
 
         // Cacher le texte d'erreur au départ
-        if (errorText_UI != null) errorText_UI.gameObject.SetActive(false);
-        if (errorText_TMP != null) errorText_TMP.gameObject.SetActive(false);
+        HideError();
     }
 
-    // Vérifie si le Start button doit être actif
-    private void UpdateStartButtonState()
+    private void OnNameChanged(string _)
     {
-        string currentName = "";
+        // Cacher l'erreur dès que l'utilisateur tape
+        HideError();
+    }
 
-        if (nameInput_TMP != null)
-            currentName = nameInput_TMP.text.Trim();
-        else if (nameInput_UI != null)
-            currentName = nameInput_UI.text.Trim();
+    private string GetCurrentName()
+    {
+        if (activeInput != null)
+            return activeInput.text.Trim();
+        if (nameInput_UI != null)
+            return nameInput_UI.text.Trim();
+        return "";
+    }
 
-        bool hasName = !string.IsNullOrEmpty(currentName);
-
-        if (startButton != null)
-            startButton.interactable = hasName;
-
-        // Cacher le message d'erreur si le nom est saisi
-        if (hasName)
+    // ✅ MODIFIÉ : Afficher l'erreur en TMP uniquement
+    private void ShowError(string message)
+    {
+        if (errorText_TMP != null)
         {
-            if (errorText_UI != null) errorText_UI.gameObject.SetActive(false);
-            if (errorText_TMP != null) errorText_TMP.gameObject.SetActive(false);
+            errorText_TMP.text = message;
+            errorText_TMP.gameObject.SetActive(true);
+        }
+        else
+        {
+            Debug.LogWarning("⚠️ Error Text TMP non assigné !");
         }
     }
 
-    // Méthode pour le bouton Start
+    // ✅ MODIFIÉ : Cacher l'erreur en TMP uniquement
+    private void HideError()
+    {
+        if (errorText_TMP != null)
+            errorText_TMP.gameObject.SetActive(false);
+    }
+
     public void OnStartButton()
     {
-        string name = "";
-
-        if (nameInput_TMP != null)
-            name = nameInput_TMP.text.Trim();
-        else if (nameInput_UI != null)
-            name = nameInput_UI.text.Trim();
+        string name = GetCurrentName();
 
         if (string.IsNullOrEmpty(name))
         {
-            // Affiche le message d'erreur
-            if (errorText_UI != null)
-            {
-                errorText_UI.text = "Enter your name";
-                errorText_UI.gameObject.SetActive(true);
-            }
-            if (errorText_TMP != null)
-            {
-                errorText_TMP.text = "Enter your name";
-                errorText_TMP.gameObject.SetActive(true);
-            }
+            ShowError("Please enter your name !");
             return;
         }
 
         PlayerName = name;
-        SceneManager.LoadScene("SampleScene"); // Charge la scène SampleScene
+        Debug.Log($"Welcome {PlayerName}!");
+        SceneManager.LoadScene("SampleScene");
     }
 
-    // Méthode pour le bouton Exit
     public void OnExitButton()
     {
         Debug.Log("Vous avez quitté l'usine.");
-        // Si tu veux fermer l'application dans un build :
-        // Application.Quit();
+        
+        #if UNITY_EDITOR
+            UnityEditor.EditorApplication.isPlaying = false;
+        #else
+            Application.Quit();
+        #endif
+    }
+
+    private void OnDestroy()
+    {
+        if (nameInput_UI != null)
+            nameInput_UI.onValueChanged.RemoveListener(OnNameChanged);
+        if (nameInput_TMP != null)
+            nameInput_TMP.onValueChanged.RemoveListener(OnNameChanged);
     }
 }
