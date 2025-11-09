@@ -30,6 +30,13 @@ public class ChariotController : MonoBehaviour
     [Header("🔧 Advanced Settings")]
     [Tooltip("Activer les logs de debug")]
     [SerializeField] private bool debugMode = true;
+    
+    [Header("🏭 Rack Integration")]
+    [Tooltip("Référence au système de rack (optionnel)")]
+    [SerializeField] private RackSystemController rackSystem;
+    
+    [Tooltip("Distance pour déposer dans le rack")]
+    [SerializeField] private float rackDepositDistance = 3f;
 
     #endregion
 
@@ -165,17 +172,11 @@ public class ChariotController : MonoBehaviour
                 StartPushing();
             }
         }
-
-        // Touche R : Décharger toutes les pièces
-        if (Input.GetKeyDown(KeyCode.R) && isInRange && GetLoadedCount() > 0)
+        
+        // Touche R : Déposer une pièce dans loadingPosition du rack
+        if (Input.GetKeyDown(KeyCode.R) && isInRange && !IsEmpty())
         {
-            UnloadAllPieces();
-        }
-
-        // Touche T : Afficher les statistiques
-        if (Input.GetKeyDown(KeyCode.T) && isInRange)
-        {
-            PrintStatistics();
+            TryDepositToRackLoading();
         }
     }
 
@@ -276,16 +277,17 @@ public class ChariotController : MonoBehaviour
         return acceptedTags.Contains(piece.tag);
     }
 
+    // Trouve le premier slot libre (0, 1, 2, ou 3)
     int GetFirstFreeSlot()
     {
-        for (int i = 0; i < loadedPieces.Length; i++)
+        for (int i = 0; i < loadedPieces.Length; i++)  // Loop sur 4 emplacements
         {
             if (loadedPieces[i] == null)
             {
-                return i;
+                return i;  // Retourne le premier slot vide
             }
         }
-        return -1;
+        return -1;  // Tous pleins
     }
 
     void DisablePiecePhysics(GameObject piece)
@@ -427,6 +429,58 @@ public class ChariotController : MonoBehaviour
 
     #endregion
 
+    #region Rack Integration
+
+    /// <summary>
+    /// Dépose une pièce du chariot dans loadingPosition du rack
+    /// </summary>
+    void TryDepositToRackLoading()
+    {
+        if (rackSystem == null)
+        {
+            LogDebug("⚠️ Aucun rack configuré");
+            return;
+        }
+        
+        if (rackSystem.loadingPosition == null)
+        {
+            LogDebug("⚠️ LoadingPosition non configurée sur le rack");
+            return;
+        }
+        
+        // Vérifier la distance avec le rack
+        float distanceToRack = Vector3.Distance(transform.position, rackSystem.transform.position);
+        if (distanceToRack > rackDepositDistance)
+        {
+            LogDebug($"⚠️ Trop loin du rack ! Distance: {distanceToRack:F1}m (max: {rackDepositDistance}m)");
+            return;
+        }
+        
+        // Récupérer la dernière pièce
+        GameObject piece = GetLastLoadedPiece();
+        if (piece == null)
+        {
+            LogDebug("❌ Aucune pièce à déposer");
+            return;
+        }
+        
+        // Retirer du chariot
+        RemovePiece(piece);
+        
+        // Déposer à loadingPosition
+        piece.transform.SetParent(rackSystem.loadingPosition);
+        piece.transform.localPosition = Vector3.zero;
+        piece.transform.localRotation = Quaternion.identity;
+        
+        // Garder la physique désactivée (déjà fait par DisablePiecePhysics)
+        // La pièce reste kinematic sans gravité, prête pour cube2
+        
+        LogDebug($"✅ {piece.name} déposé dans loadingPosition du rack");
+        Debug.Log($"📦 Pièce transférée vers le rack ! Entrez position:ligne dans l'interface");
+    }
+
+    #endregion
+
     #region Utilities
 
     void LogDebug(string message)
@@ -470,6 +524,29 @@ public class ChariotController : MonoBehaviour
                 UnityEditor.Handles.Label(worldPos + Vector3.up * 0.5f, $"Slot {i + 1}");
                 #endif
             }
+        }
+        
+        // Visualiser la zone de dépôt rack
+        if (rackSystem != null)
+        {
+            Gizmos.color = Color.cyan;
+            Gizmos.DrawLine(transform.position, rackSystem.transform.position);
+            
+            float distanceToRack = Vector3.Distance(transform.position, rackSystem.transform.position);
+            bool inRange = distanceToRack <= rackDepositDistance;
+            
+            Gizmos.color = inRange ? Color.green : Color.red;
+            Gizmos.DrawWireSphere(rackSystem.transform.position, rackDepositDistance);
+            
+            #if UNITY_EDITOR
+            if (rackSystem.loadingPosition != null)
+            {
+                UnityEditor.Handles.Label(
+                    rackSystem.loadingPosition.position + Vector3.up * 1f,
+                    inRange ? "✅ Zone de dépôt" : "❌ Trop loin"
+                );
+            }
+            #endif
         }
     }
 

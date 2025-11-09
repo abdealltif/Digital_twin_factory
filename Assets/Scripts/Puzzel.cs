@@ -1,23 +1,21 @@
 using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
-using UnityEngine;
-
 public class Puzzel : MonoBehaviour
 
 {
-    public GameObject Mypuzzle;
-    private void OnTeiggerEnter( Collider other){
+    public GameObject MyPuzzle;
+    private void OnTriggerEnter( Collider other){
         if (other.tag=="Player")
         {
-            Mypuzzle.SetActive(true);
+            MyPuzzle.SetActive(true);
             Debug.Log("player entred");
         }
     }
-    private void OnTeiggerExit( Collider other){
+    private void OnTriggerExit( Collider other){
         if (other.tag=="Player")
         {
-            Mypuzzle.SetActive(false);
+            MyPuzzle.SetActive(false);
             Debug.Log("player exist");
         }
     }

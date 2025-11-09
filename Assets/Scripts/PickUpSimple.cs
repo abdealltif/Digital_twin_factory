@@ -14,6 +14,10 @@ public class PickUpSimple : MonoBehaviour
     public string pickupAnimationName = "PressP";
     public float pickupAnimationDuration = 1f;
     
+    [Header("Rack Loading")]
+    [SerializeField] private RackSystemController rackSystem;
+    [SerializeField] private float rackDepositDistance = 2f;
+
     private GameObject heldObject;
     private Rigidbody heldRb;
     private float lastClickTime;
@@ -37,6 +41,20 @@ public class PickUpSimple : MonoBehaviour
             
             // Tenter de ramasser (du sol OU du trolley)
             TryPickup();
+        }
+        
+        // Touche L : Déposer dans le rack si proche
+        if (Input.GetKeyDown(KeyCode.L) && heldObject != null && rackSystem != null)
+        {
+            float distance = Vector3.Distance(transform.position, rackSystem.transform.position);
+            if (distance <= rackDepositDistance)
+            {
+                DepositToRackLoading();
+            }
+            else
+            {
+                Debug.Log("⚠️ Trop loin du rack !");
+            }
         }
     }
 
@@ -247,5 +265,32 @@ public class PickUpSimple : MonoBehaviour
         heldObject = null;
         heldRb = null;
         sourceChariot = null;
+    }
+
+    void DepositToRackLoading()
+    {
+        if (heldObject == null) return;
+        
+        // Lâcher l'objet
+        GameObject piece = heldObject;
+        heldObject = null;
+        
+        // Réactiver la physique temporairement
+        Rigidbody rb = piece.GetComponent<Rigidbody>();
+        if (rb != null)
+        {
+            rb.isKinematic = false;
+            rb.useGravity = true;
+        }
+        
+        // Positionner près de loadingPosition
+        if (rackSystem != null)
+        {
+            Transform loadingPos = rackSystem.loadingPosition;
+            piece.transform.position = loadingPos.position;
+            piece.transform.rotation = loadingPos.rotation;
+        }
+        
+        Debug.Log($"📦 {piece.name} déposé dans loadingPosition");
     }
 }
